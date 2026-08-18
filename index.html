@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Work – Task Manager</title>
+    <meta name="description" content="Simple task manager with dates and file export." />
+    <meta property="og:title" content="Work – Task Manager" />
+    <meta property="og:description" content="Simple task manager with dates and file export." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com">
+    </script>
+
+    <!-- React + ReactDOM + Babel Standalone -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js">
+    </script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js">
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js">
+    </script>
+
+    <!-- canvas-confetti -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js">
+    </script>
+
+    <!-- jsPDF and autoTable for PDF generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js">
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js">
+    </script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f8fafc;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+        }
+        #root {
+            min-height: 100vh;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 8px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 8px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        .task-row:hover {
+            background: #f1f5f9;
+        }
+        input:focus,
+        textarea:focus {
+            outline: none;
+            ring: 2px solid #6366f1;
+            ring-offset: 2px;
+        }
+        .empty-illustration {
+            opacity: 0.6;
+        }
+        .modal-overlay {
+            background: rgba(15, 23, 42, 0.5);
+            backdrop-filter: blur(4px);
+        }
+        .modal-content {
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .task-textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+        .report-item {
+            border-bottom: 1px solid #e2e8f0;
+            padding: 0.75rem 0;
+        }
+        .report-item:last-child {
+            border-bottom: none;
+        }
+        .report-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+        .report-table th {
+            text-align: left;
+            padding: 0.5rem 0.75rem;
+            background: #f1f5f9;
+            font-weight: 600;
+            color: #0f172a;
+            border-bottom: 2px solid #cbd5e1;
+        }
+        .report-table td {
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid #e2e8f0;
+            vertical-align: top;
+        }
+        .report-table tr:last-child td {
+            border-bottom: none;
+        }
+        .report-table .date-col {
+            white-space: nowrap;
+            font-weight: 500;
+            color: #1e293b;
+        }
+        .report-table .title-col {
+            font-weight: 600;
+            color: #0f172a;
+        }
+        .report-table .desc-col {
+            color: #334155;
+            line-height: 1.5;
+        }
+        .report-header {
+            border-bottom: 2px solid #1e293b;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .report-revision {
+            border-top: 2px solid #1e293b;
+            padding-top: 0.75rem;
+            margin-top: 1.5rem;
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: #475569;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } = React;
+
+        // ──────────────────────────────────────────────
+        //  Context
+        // ──────────────────────────────────────────────
+        const TaskContext = createContext(null);
+
+        function useTasks() {
+            const ctx = useContext(TaskContext);
+            if (!ctx) throw new Error('useTasks must be used within a TaskProvider');
+            return ctx;
+        }
+
+        // ──────────────────────────────────────────────
+        //  Helpers
+        // ──────────────────────────────────────────────
+        const generateId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+        const formatDate = (dateStr) => {
+            if (!dateStr) return 'No date';
+            const d = new Date(dateStr);
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        };
+
+        const formatDateShort = (dateStr) => {
+            if (!dateStr) return '';
+            const d = new Date(dateStr);
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        };
+
+        const formatDateReport = (dateStr) => {
+            if (!dateStr) return '';
+            const d = new Date(dateStr);
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}.${month}.${day}`;
+        };
+
+        // ──────────────────────────────────────────────
+        //  Custom Hooks: localStorage
+        // ──────────────────────────────────────────────
+        function useLocalStorage(key, initialValue) {
+            const [value, setValue] = useState(() => {
+                try {
+                    const item = localStorage.getItem(key);
+                    return item ? JSON.parse(item) : initialValue;
+                } catch {
+                    return initialValue;
+                }
+            });
+
+            useEffect(() => {
+                localStorage.setItem(key, JSON.stringify(value));
+            }, [key, value]);
+
+            return [value, setValue];
+        }
+
+        // ──────────────────────────────────────────────
+        //  Main App
+        // ──────────────────────────────────────────────
+        function App() {
+            const [tasks, setTasks] = useLocalStorage('tasks', []);
+            const [filter, setFilter] = useState('all');
+            const [searchQuery, setSearchQuery] = useState('');
+            const [dateFilter, setDateFilter] = useState('');
+            const [editingTask, setEditingTask] = useState(null);
+            const [viewingTask, setViewingTask] = useState(null);
+            const [showReport, setShowReport] = useState(false);
+
+            // ── Task CRUD ──
+            const addTask = (taskData) => {
+                const newTask = {
+                    id: generateId(),
+                    ...taskData,
+                    createdAt: new Date().toISOString(),
+                    completed: false,
+                };
+                setTasks(prev => [newTask, ...prev]);
+            };
+
+            const updateTask = (id, updates) => {
+                setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+            };
+
+            const deleteTask = (id) => {
+                if (confirm('Delete this task?')) {
+                    setTasks(prev => prev.filter(t => t.id !== id));
+                }
+            };
+
+            const toggleComplete = (id) => {
+                setTasks(prev => prev.map(t => {
+                    if (t.id === id) {
+                        const newCompleted = !t.completed;
+                        if (newCompleted) {
+                            if (window.confetti) {
+                                window.confetti({
+                                    particleCount: 80,
+                                    spread: 70,
+                                    origin: { y: 0.6 }
+                                });
+                            }
+                        }
+                        return { ...t, completed: newCompleted };
+                    }
+                    return t;
+                }));
+            };
+
+            // ── Import JSON ──
+            const importJSON = (file) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const imported = JSON.parse(e.target.result);
+                        if (Array.isArray(imported)) {
+                            if (confirm(`This will replace all current tasks (${tasks.length}) with ${imported.length} tasks from the file. Continue?`)) {
+                                const sanitized = imported.map(t => ({
+                                    id: t.id || generateId(),
+                                    title: t.title || 'Untitled',
+                                    description: t.description || '',
+                                    deadline: t.deadline || null,
+                                    completed: t.completed || false,
+                                    createdAt: t.createdAt || new Date().toISOString()
+                                }));
+                                setTasks(sanitized);
+                            }
+                        } else {
+                            alert('Invalid JSON: expected an array of tasks.');
+                        }
+                    } catch (err) {
+                        alert('Error reading file: ' + err.message);
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            // ── Filters ──
+            const filteredTasks = useMemo(() => {
+                let result = tasks;
+                if (filter === 'todo') {
+                    result = result.filter(t => !t.completed);
+                }
+                if (searchQuery.trim()) {
+                    const q = searchQuery.toLowerCase().trim();
+                    result = result.filter(t =>
+                        t.title.toLowerCase().includes(q) ||
+                        t.description?.toLowerCase().includes(q)
+                    );
+                }
+                if (dateFilter) {
+                    const filterDate = new Date(dateFilter);
+                    filterDate.setHours(0, 0, 0, 0);
+                    result = result.filter(t => {
+                        if (!t.deadline) return false;
+                        const taskDate = new Date(t.deadline);
+                        taskDate.setHours(0, 0, 0, 0);
+                        return taskDate.getTime() === filterDate.getTime();
+                    });
+                }
+                result = [...result].sort((a, b) => {
+                    if (a.deadline && b.deadline) {
+                        return new Date(a.deadline) - new Date(b.deadline);
+                    }
+                    if (a.deadline) return -1;
+                    if (b.deadline) return 1;
+                    return 0;
+                });
+                return result;
+            }, [tasks, filter, searchQuery, dateFilter]);
+
+            // ── Stats ──
+            const stats = useMemo(() => {
+                const total = tasks.length;
+                const todo = tasks.filter(t => !t.completed).length;
+                return { total, todo };
+            }, [tasks]);
+
+            // ── Export JSON ──
+            const exportJSON = () => {
+                const data = JSON.stringify(tasks, null, 2);
+                const blob = new Blob([data], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `tasks_${new Date().toISOString().slice(0, 10)}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            // ── Generate PDF report ──
+            const generatePDF = () => {
+                const sorted = [...tasks].sort((a, b) => {
+                    const dateA = a.deadline ? new Date(a.deadline) : new Date(a.createdAt);
+                    const dateB = b.deadline ? new Date(b.deadline) : new Date(b.createdAt);
+                    return dateA - dateB;
+                });
+
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF({
+                    orientation: 'portrait',
+                    unit: 'mm',
+                    format: 'a4'
+                });
+
+                const pageWidth = doc.internal.pageSize.getWidth();
+                const margin = 20;
+                const startY = 30;
+
+                // Title
+                doc.setFontSize(18);
+                doc.setFont('helvetica', 'bold');
+                doc.text('# EXECUTIVE SUMMARY', margin, startY);
+
+                // Subtitle
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text('Operational Activity Report', margin, startY + 8);
+
+                // Date/time
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'normal');
+                const now = new Date();
+                const dateStr = now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+                const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                doc.text(`Generated: ${dateStr} at ${timeStr}`, margin, startY + 14);
+
+                // Table
+                const tableData = sorted.map(task => [
+                    task.deadline ? formatDateReport(task.deadline) : '—',
+                    task.title || 'Untitled',
+                    task.description || '—'
+                ]);
+
+                doc.autoTable({
+                    startY: startY + 20,
+                    head: [
+                        ['DATE', 'TITLE', 'DESCRIPTION']
+                    ],
+                    body: tableData,
+                    theme: 'striped',
+                    headStyles: {
+                        fillColor: [241, 245, 249],
+                        textColor: [15, 23, 42],
+                        fontStyle: 'bold',
+                        halign: 'left',
+                        fontSize: 10,
+                    },
+                    styles: {
+                        fontSize: 9,
+                        cellPadding: 3,
+                        overflow: 'linebreak',
+                        valign: 'top',
+                    },
+                    columnStyles: {
+                        0: { cellWidth: 30, fontStyle: 'bold', halign: 'left' },
+                        1: { cellWidth: 40, fontStyle: 'bold' },
+                        2: { cellWidth: 'auto' },
+                    },
+                    margin: { left: margin, right: margin },
+                    tableWidth: pageWidth - 2 * margin,
+                });
+
+                // Revision footer
+                const finalY = doc.lastAutoTable.finalY + 10;
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'bold');
+                doc.text('REVISION', margin, finalY);
+                doc.setFont('helvetica', 'normal');
+                const rev = `v1.0.0_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_FINAL`;
+                doc.text(rev, margin + 30, finalY);
+
+                // Save PDF
+                doc.save(`report_${now.toISOString().slice(0, 10)}.pdf`);
+            };
+
+            const clearDateFilter = () => setDateFilter('');
+
+            const contextValue = {
+                tasks,
+                setTasks,
+                addTask,
+                updateTask,
+                deleteTask,
+                toggleComplete,
+                filter,
+                setFilter,
+                searchQuery,
+                setSearchQuery,
+                dateFilter,
+                setDateFilter,
+                clearDateFilter,
+                filteredTasks,
+                stats,
+                editingTask,
+                setEditingTask,
+                viewingTask,
+                setViewingTask,
+                exportJSON,
+                importJSON,
+                showReport,
+                setShowReport,
+                generatePDF,
+            };
+
+            return ( <
+                TaskContext.Provider value = { contextValue } >
+                <
+                div className = "min-h-screen bg-slate-50" >
+                <
+                TaskManager / >
+                <
+                TaskViewModal / >
+                <
+                ReportModal / >
+                <
+                /div> <
+                /TaskContext.Provider>
+            );
+        }
+
+        // ──────────────────────────────────────────────
+        //  ReportModal Component
+        // ──────────────────────────────────────────────
+        function ReportModal() {
+            const { showReport, setShowReport, tasks, generatePDF } = useTasks();
+
+            if (!showReport) return null;
+
+            const sorted = [...tasks].sort((a, b) => {
+                const dateA = a.deadline ? new Date(a.deadline) : new Date(a.createdAt);
+                const dateB = b.deadline ? new Date(b.deadline) : new Date(b.createdAt);
+                return dateA - dateB;
+            });
+
+            const total = sorted.length;
+            const completed = sorted.filter(t => t.completed).length;
+            const todo = total - completed;
+
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+            const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+            return ( <
+                    div className = "fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay" >
+                    <
+                    div className = "bg-white rounded-2xl max-w-5xl w-full p-6 shadow-2xl modal-content relative" >
+                    <
+                    button onClick = {
+                        () => setShowReport(false) }
+                    className = "absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-xl" >
+                    ✕ <
+                    /button>
+
+                    <
+                    div className = "report-header" >
+                    <
+                    h1 className = "text-3xl font-bold text-slate-900 tracking-tight" >
+                    # EXECUTIVE SUMMARY <
+                    /h1> <
+                    /div>
+
+                    <
+                    h2 className = "text-xl font-semibold text-slate-800 mb-1" >
+                    Operational Activity Report <
+                    /h2> <
+                    p className = "text-sm text-slate-500 mb-4" >
+                    Generated: { dateStr } at { timeStr } ·
+                    Total: { total } · Completed: { completed } · To-Do: { todo } <
+                    /p>
+
+                    <
+                    div className = "border border-slate-200 rounded-xl overflow-hidden" >
+                    <
+                    div className = "max-h-[50vh] overflow-y-auto" > {
+                        sorted.length === 0 ? ( <
+                            div className = "p-8 text-center text-slate-400" >
+                            No tasks to report. <
+                            /div>
+                        ) : ( <
+                            table className = "report-table" >
+                            <
+                            thead >
+                            <
+                            tr >
+                            <
+                            th className = "date-col" > DATE < /th> <
+                            th className = "title-col" > TITLE < /th> <
+                            th className = "desc-col" > DESCRIPTION < /th> <
+                            /tr> <
+                            /thead> <
+                            tbody > {
+                                sorted.map(task => ( <
+                                    tr key = { task.id } >
+                                    <
+                                    td className = "date-col" >
+                                    { task.deadline ? formatDateReport(task.deadline) : '—' } <
+                                    /td> <
+                                    td className = "title-col" >
+                                    <
+                                    span className = { task.completed ? 'line-through text-slate-400' : '' } >
+                                    { task.title || 'Untitled' } <
+                                    /span> {
+                                        task.completed && < span className = "ml-2 text-xs text-emerald-600" > ✅ < /span>} <
+                                            /td> <
+                                            td className = "desc-col" >
+                                            { task.description || '—' } <
+                                            /td> <
+                                            /tr>
+                                        ))
+                                    } <
+                                    /tbody> <
+                                    /table>
+                                )
+                            } <
+                            /div> <
+                            /div>
+
+                            <
+                            div className = "report-revision" >
+                            <
+                            strong > REVISION < /strong> <
+                            span className = "ml-2 font-mono" >
+                            v1.0.0_{
+                                now.getFullYear()
+                            } {
+                                String(now.getMonth() + 1).padStart(2, '0')
+                            } {
+                                String(now.getDate()).padStart(2, '0')
+                            } _FINAL <
+                            /span> <
+                            /div>
+
+                            <
+                            div className = "flex gap-3 pt-4 border-t border-slate-200 mt-4" >
+                            <
+                            button onClick = { generatePDF }
+                            className = "px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition" >
+                            ⬇️ Download as PDF <
+                            /button> <
+                            button onClick = {
+                                () => setShowReport(false) }
+                            className = "px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-medium transition" >
+                            Close <
+                            /button> <
+                            /div> <
+                            /div> <
+                            /div>
+                        );
+                    }
+
+                    // ──────────────────────────────────────────────
+                    //  TaskViewModal
+                    // ──────────────────────────────────────────────
+                    function TaskViewModal() {
+                        const { viewingTask, setViewingTask, setEditingTask } = useTasks();
+                        if (!viewingTask) return null;
+
+                        const handleClose = () => setViewingTask(null);
+                        const handleEdit = () => {
+                            setViewingTask(null);
+                            setTimeout(() => setEditingTask(viewingTask), 50);
+                        };
+
+                        return ( <
+                                div className = "fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay" >
+                                <
+                                div className = "bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl modal-content relative" >
+                                <
+                                button onClick = { handleClose }
+                                className = "absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-xl" >
+                                ✕ <
+                                /button>
+
+                                <
+                                h2 className = "text-2xl font-bold text-slate-800 mb-2" >
+                                { viewingTask.title } <
+                                /h2>
+
+                                <
+                                div className = "flex items-center gap-3 mb-4 flex-wrap" >
+                                <
+                                span className = { `inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded-full ${viewingTask.completed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}` } >
+                                { viewingTask.completed ? '✅ Done' : '⏳ To-Do' } <
+                                /span> {
+                                    viewingTask.deadline && ( <
+                                        span className = "text-sm text-slate-500" >
+                                        📅 { formatDate(viewingTask.deadline) } <
+                                        /span>
+                                    )
+                                } <
+                                span className = "text-sm text-slate-400" >
+                                ⏱️ Created: { new Date(viewingTask.createdAt).toLocaleDateString() } <
+                                /span> <
+                                /div>
+
+                                <
+                                div className = "mb-4" >
+                                <
+                                h3 className = "text-sm font-medium text-slate-700 mb-1" > Description < /h3> <
+                                div className = "p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-700 whitespace-pre-wrap text-sm max-h-60 overflow-y-auto" >
+                                { viewingTask.description || 'No description provided.' } <
+                                /div> <
+                                /div>
+
+                                <
+                                div className = "flex gap-3 pt-2 border-t border-slate-200" >
+                                <
+                                button onClick = { handleEdit }
+                                className = "px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition" >
+                                ✏️ Edit <
+                                /button> <
+                                button onClick = { handleClose }
+                                className = "px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-medium transition" >
+                                Close <
+                                /button> <
+                                /div> <
+                                /div> <
+                                /div>
+                            );
+                        }
+
+                        // ──────────────────────────────────────────────
+                        //  TaskManager Component
+                        // ──────────────────────────────────────────────
+                        function TaskManager() {
+                            const {
+                                filteredTasks,
+                                stats,
+                                filter,
+                                setFilter,
+                                searchQuery,
+                                setSearchQuery,
+                                dateFilter,
+                                setDateFilter,
+                                clearDateFilter,
+                                addTask,
+                                updateTask,
+                                deleteTask,
+                                toggleComplete,
+                                editingTask,
+                                setEditingTask,
+                                exportJSON,
+                                importJSON,
+                                tasks,
+                                setShowReport,
+                            } = useTasks();
+
+                            const [formData, setFormData] = useState({
+                                title: '',
+                                description: '',
+                                deadline: '',
+                            });
+
+                            const [isFormOpen, setIsFormOpen] = useState(false);
+
+                            useEffect(() => {
+                                if (editingTask) {
+                                    setFormData({
+                                        title: editingTask.title || '',
+                                        description: editingTask.description || '',
+                                        deadline: editingTask.deadline || '',
+                                    });
+                                    setIsFormOpen(true);
+                                } else {
+                                    setFormData({ title: '', description: '', deadline: '' });
+                                }
+                            }, [editingTask]);
+
+                            const handleFormChange = (e) => {
+                                const { name, value } = e.target;
+                                setFormData(prev => ({ ...prev, [name]: value }));
+                            };
+
+                            const handleSubmit = (e) => {
+                                e.preventDefault();
+                                if (!formData.title.trim()) return;
+
+                                if (editingTask) {
+                                    updateTask(editingTask.id, {
+                                        title: formData.title.trim(),
+                                        description: formData.description.trim(),
+                                        deadline: formData.deadline || null,
+                                    });
+                                    setEditingTask(null);
+                                } else {
+                                    addTask({
+                                        title: formData.title.trim(),
+                                        description: formData.description.trim(),
+                                        deadline: formData.deadline || null,
+                                    });
+                                }
+
+                                setFormData({ title: '', description: '', deadline: '' });
+                                setIsFormOpen(false);
+                            };
+
+                            const handleCancel = () => {
+                                setEditingTask(null);
+                                setIsFormOpen(false);
+                                setFormData({ title: '', description: '', deadline: '' });
+                            };
+
+                            const fileInputRef = useRef(null);
+                            const handleImportClick = () => fileInputRef.current.click();
+                            const handleFileChange = (e) => {
+                                const file = e.target.files[0];
+                                if (file) importJSON(file);
+                                e.target.value = '';
+                            };
+
+                            const filters = [
+                                { key: 'all', label: 'All', count: stats.total },
+                                { key: 'todo', label: 'To-Do', count: stats.todo },
+                            ];
+
+                            return ( <
+                                    div className = "max-w-6xl mx-auto px-4 py-6 sm:px-6 lg:px-8" >
+
+                                    <
+                                    div className = "flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6" >
+                                    <
+                                    div >
+                                    <
+                                    h1 className = "text-2xl sm:text-3xl font-bold text-slate-900 flex items-center gap-2" >
+                                    <
+                                    span > 💼 < /span> Work <
+                                    /h1> <
+                                    p className = "text-slate-500 text-sm mt-0.5" >
+                                    Track your tasks with dates. Mark done to celebrate! <
+                                    /p> <
+                                    /div> <
+                                    div className = "flex flex-wrap gap-2" >
+                                    <
+                                    button onClick = {
+                                        () => setShowReport(true) }
+                                    className = "px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-sm font-medium transition shadow-sm flex items-center gap-1.5" >
+                                    <
+                                    span > 📊 < /span> Report <
+                                    /button> <
+                                    button onClick = {
+                                        () => setIsFormOpen(!isFormOpen) }
+                                    className = "px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition shadow-sm flex items-center gap-1.5" >
+                                    <
+                                    span > + < /span> { isFormOpen ? 'Close' : 'New Task' } <
+                                    /button> <
+                                    /div> <
+                                    /div>
+
+                                    <
+                                    div className = "grid grid-cols-2 gap-3 mb-6" > {
+                                        filters.map(f => ( <
+                                            button key = { f.key }
+                                            onClick = {
+                                                () => setFilter(f.key) }
+                                            className = { `px-3 py-2 rounded-xl text-sm font-medium transition-all text-center ${filter === f.key ? 'bg-indigo-600 text-white shadow-md' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'}` } >
+                                            <
+                                            div className = "text-lg font-bold" > { f.count } < /div> <
+                                            div className = "text-xs opacity-80" > { f.label } < /div> <
+                                            /button>
+                                        ))
+                                    } <
+                                    /div>
+
+                                    <
+                                    div className = "flex flex-col sm:flex-row gap-3 mb-6" >
+                                    <
+                                    div className = "flex-1 relative" >
+                                    <
+                                    input type = "text"
+                                    placeholder = "Search tasks..."
+                                    value = { searchQuery }
+                                    onChange = {
+                                        (e) => setSearchQuery(e.target.value) }
+                                    className = "w-full px-4 py-2.5 pl-10 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition" /
+                                    >
+                                    <
+                                    span className = "absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" > 🔍 < /span> {
+                                        searchQuery && ( <
+                                            button onClick = {
+                                                () => setSearchQuery('') }
+                                            className = "absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm" >
+                                            ✕ <
+                                            /button>
+                                        )
+                                    } <
+                                    /div> <
+                                    div className = "flex items-center gap-2" >
+                                    <
+                                    div className = "relative" >
+                                    <
+                                    input type = "date"
+                                    value = { dateFilter }
+                                    onChange = {
+                                        (e) => setDateFilter(e.target.value) }
+                                    className = "px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 transition w-40" /
+                                    >
+                                    {
+                                        dateFilter && ( <
+                                            button onClick = { clearDateFilter }
+                                            className = "absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm" >
+                                            ✕ <
+                                            /button>
+                                        )
+                                    } <
+                                    /div> <
+                                    span className = "text-xs text-slate-400 whitespace-nowrap" >
+                                    Filter by date <
+                                    /span> <
+                                    /div> <
+                                    div className = "flex gap-2" >
+                                    <
+                                    button onClick = { exportJSON }
+                                    className = "px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium transition shadow-sm flex items-center gap-1.5" >
+                                    <
+                                    span > 📄 < /span> Export JSON <
+                                    /button> <
+                                    button onClick = { handleImportClick }
+                                    className = "px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition shadow-sm flex items-center gap-1.5" >
+                                    <
+                                    span > 📂 < /span> Import JSON <
+                                    /button> <
+                                    input type = "file"
+                                    ref = { fileInputRef }
+                                    onChange = { handleFileChange }
+                                    accept = ".json,application/json"
+                                    className = "hidden" /
+                                    >
+                                    <
+                                    /div> <
+                                    /div>
+
+                                    {
+                                        isFormOpen && ( <
+                                            div className = "mb-6 p-5 bg-white rounded-2xl shadow-sm border border-slate-200" >
+                                            <
+                                            h3 className = "text-lg font-semibold text-slate-800 mb-4" > { editingTask ?
+                                                '✏️ Edit Task' : '➕ New Task' } < /h3> <
+                                            form onSubmit = { handleSubmit }
+                                            className = "grid grid-cols-1 sm:grid-cols-2 gap-4" >
+                                            <
+                                            div className = "sm:col-span-2" >
+                                            <
+                                            label className = "block text-sm font-medium text-slate-700 mb-1" >
+                                            Title * <
+                                            /label> <
+                                            input type = "text"
+                                            name = "title"
+                                            value = { formData.title }
+                                            onChange = { handleFormChange }
+                                            placeholder = "What needs to be done?"
+                                            className = "w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 transition"
+                                            required /
+                                            >
+                                            <
+                                            /div> <
+                                            div className = "sm:col-span-2" >
+                                            <
+                                            label className = "block text-sm font-medium text-slate-700 mb-1" >
+                                            Description <
+                                            /label> <
+                                            textarea name = "description"
+                                            value = { formData.description }
+                                            onChange = { handleFormChange }
+                                            placeholder = "Add details..."
+                                            rows = "4"
+                                            className = "w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 transition task-textarea" / >
+                                            <
+                                            /div> <
+                                            div >
+                                            <
+                                            label className = "block text-sm font-medium text-slate-700 mb-1" >
+                                            Date <
+                                            /label> <
+                                            input type = "date"
+                                            name = "deadline"
+                                            value = { formData.deadline }
+                                            onChange = { handleFormChange }
+                                            className = "w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 transition" /
+                                            >
+                                            <
+                                            /div> <
+                                            div className = "sm:col-span-2 flex gap-3 pt-2" >
+                                            <
+                                            button type = "submit"
+                                            className = "px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition shadow-sm" >
+                                            { editingTask ? 'Update Task' : 'Add Task' } <
+                                            /button> <
+                                            button type = "button"
+                                            onClick = { handleCancel }
+                                            className = "px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-medium transition" >
+                                            Cancel <
+                                            /button> <
+                                            /div> <
+                                            /form> <
+                                            /div>
+                                        )
+                                    }
+
+                                    <
+                                    div className = "space-y-0.5" > {
+                                        filteredTasks.length === 0 ? ( <
+                                            div className = "text-center py-16 bg-white rounded-2xl border border-slate-200" >
+                                            <
+                                            div className = "text-5xl mb-3 empty-illustration" > 📭 < /div> <
+                                            h3 className = "text-lg font-medium text-slate-600" >
+                                            No tasks { filter !== 'all' ? `(${filter === 'todo' ? 'To-Do' : filter})` :
+                                            '' } {
+                                                dateFilter && ' for selected date' } <
+                                                /h3> <
+                                                p className = "text-sm text-slate-400 mt-1" >
+                                                { tasks.length === 0 ?
+                                                    'Start by adding your first task!' :
+                                                    'Try a different filter, search, or date.' } <
+                                                    /p> <
+                                                    /div>
+                                                ) : (
+                                                    filteredTasks.map(task => ( <
+                                                        TaskItem key = { task.id }
+                                                        task = { task } />
+                                                    ))
+                                                )
+                                            } <
+                                            /div>
+
+                                            <
+                                            div className = "mt-8 text-center text-xs text-slate-400 border-t border-slate-200 pt-6" >
+                                            <
+                                            p > { tasks.length } total · {
+                                                stats.todo
+                                            } to-do {
+                                                dateFilter && ` · filtered by ${formatDate(dateFilter)}` } <
+                                                /p> <
+                                                p className = "mt-1" >
+                                                💡 Complete a task to trigger confetti! <
+                                                /p> <
+                                                /div> <
+                                                /div>
+                                            );
+                                        }
+
+                                        // ──────────────────────────────────────────────
+                                        //  TaskItem
+                                        // ──────────────────────────────────────────────
+                                        function TaskItem({ task }) {
+                                            const {
+                                                deleteTask,
+                                                toggleComplete,
+                                                setEditingTask,
+                                                setViewingTask,
+                                            } = useTasks();
+
+                                            return ( <
+                                                    div className = "task-row flex items-center gap-3 px-3 py-2 rounded-lg border-b border-slate-100 hover:bg-slate-50 transition" >
+                                                    <
+                                                    button onClick = {
+                                                        () => toggleComplete(task.id) }
+                                                    className = { `w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 hover:border-indigo-400'}` } >
+                                                    {
+                                                        task.completed && < span className = "text-white text-xs" > ✓ < /span>} <
+                                                            /button>
+                                                            <
+                                                            span className = { `flex-1 text-sm font-medium truncate ${task.completed ? 'line-through text-slate-400' : 'text-slate-800'}` } >
+                                                            { task.title } <
+                                                            /span> {
+                                                                task.deadline && ( <
+                                                                    span className = "text-xs whitespace-nowrap text-slate-500" >
+                                                                    📅 { formatDateShort(task.deadline) } <
+                                                                    /span>
+                                                                )
+                                                            } <
+                                                            div className = "flex items-center gap-0.5" >
+                                                            <
+                                                            button onClick = {
+                                                                () => setViewingTask(task) }
+                                                            className = "p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition" >
+                                                            👁️ <
+                                                            /button> <
+                                                            button onClick = {
+                                                                () => setEditingTask(task) }
+                                                            className = "p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition" >
+                                                            ✏️ <
+                                                            /button> <
+                                                            button onClick = {
+                                                                () => deleteTask(task.id) }
+                                                            className = "p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition" >
+                                                            🗑️ <
+                                                            /button> <
+                                                            /div> <
+                                                            /div>
+                                                        );
+                                                    }
+
+                                                    // ──────────────────────────────────────────────
+                                                    //  Render
+                                                    // ──────────────────────────────────────────────
+                                                    const root = ReactDOM.createRoot(document.getElementById('root'));
+                                                    root.render( < App / > );
+    </script>
+</body>
+</html>
